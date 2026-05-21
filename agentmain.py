@@ -160,12 +160,33 @@ class GenericAgent:
                 display_queue.put({'done': full_resp, 'source': source})
                 self.history = handler.history_info
             except Exception as e:
-                print(f"Backend Error: {format_error(e)}")
-                display_queue.put({'done': full_resp + f'\n```\n{format_error(e)}\n```', 'source': source})
+                err_str = format_error(e)
+                print(f"Backend Error: {err_str}")
+                display_queue.put({'done': full_resp + f'\n```\n{err_str}\n```', 'source': source})
+                # 流异常(网络/连接错误)自动恢复：将原任务+错误上下文重新入队
+                _RETRYABLE = ('ChunkedEncodingError', 'ConnectionError', 'ConnectionResetError',
+                              'TimeoutError', 'RemoteDisconnected', 'ReadTimeout', 'SSLError')
+                err_type = type(e).__name__
+                if any(t in err_type for t in _RETRYABLE):
+                    if not hasattr(self, '_retry_count'): self._retry_count = {}
+                    retry_n = self._retry_count.get(raw_query, 0) + 1
+                    self._retry_count[raw_query] = retry_n
+                    if retry_n <= 2:
+                        import time; time.sleep(min(retry_n * 10, 30))
+                        recovery_q = (f'[异常自动恢复-{retry_n}/2] 之前的任务因 {err_type} 中断。'
+                                      f'请继续完成以下原始任务(从断点继续，勿从头开始)：\n{raw_query}')
+                        self.put_task(recovery_q, source='auto_recovery')
+                        print(f"[AUTO-RETRY] {err_type}, retry {retry_n}/2, re-queued original task")
+                    else:
+                        print(f"[AUTO-RETRY] 已达最大重试次数({retry_n})，放弃自动恢复")
             finally:
                 if self.stop_sig: print('User aborted the task.')
                 self.is_running = self.stop_sig = False
                 self.task_queue.task_done()
+                # 清理过期的重试计数
+                if hasattr(self, '_retry_count'):
+                    expired = [k for k, v in self._retry_count.items() if v > 2]
+                    for k in expired: del self._retry_count[k]
                 if self.handler is not None: self.handler.code_stop_signal.append(1)
 
 GeneraticAgent = GenericAgent    
@@ -242,34 +263,43 @@ if __name__ == '__main__':
             if task and task == '/exit': break
             if task is None: continue
             print(f'[Reflect] triggered: {task[:80]}')
-            dq = agent.put_task(task, source='reflect')
+            # [USER_CMD] prefix: scheduler idle auto-continue, inject as user command
+            _src = 'user' if isinstance(task, str) and task.startswith('[USER_CMD]') else 'reflect'
+            _task = task[len('[USER_CMD]'):] if _src == 'user' else task
+            dq = agent.put_task(_task, source=_src)
+            _drain_ok = False
             try:
                 while 'done' not in (item := dq.get(timeout=180)): pass
                 result = item['done']
                 print(result)
+                _drain_ok = True
             except Exception as e:
                 if getattr(mod, 'ONCE', False): raise
-                print(f'[Reflect] drain error: {e}'); result = f'[ERROR] {e}'
-            log_dir = os.path.join(script_dir, 'temp/reflect_logs'); os.makedirs(log_dir, exist_ok=True)
-            script_name = os.path.splitext(os.path.basename(args.reflect))[0]
-            open(os.path.join(log_dir, f'{script_name}_{datetime.now():%Y-%m-%d}.log'), 'a', encoding='utf-8').write(f'[{datetime.now():%m-%d %H:%M}]\n{result}\n\n')
+                agent.abort(); time.sleep(3)
+                if hasattr(mod, 'on_drain_timeout'): mod.on_drain_timeout()
+                print(f'[Reflect] drain error: {e}, aborted current task'); result = f'[ERROR] {e}'
+                log_dir = os.path.join(script_dir, 'temp/reflect_logs'); os.makedirs(log_dir, exist_ok=True)
+                script_name = os.path.splitext(os.path.basename(args.reflect))[0]
+                open(os.path.join(log_dir, f'{script_name}_{datetime.now():%Y-%m-%d}.log'), 'a', encoding='utf-8').write(f'[{datetime.now():%m-%d %H:%M}]\n{result}\n\n')
+            # drain正常完成则重置退避计数，超时则已在except中调用on_drain_timeout
+            if _drain_ok and hasattr(mod, 'reset_drain_timeout'): mod.reset_drain_timeout()
             if (on_done := getattr(mod, 'on_done', None)):
                 try: on_done(result)
                 except Exception as e: print(f'[Reflect] on_done error: {e}')
             if getattr(mod, 'ONCE', False): print('[Reflect] ONCE=True, exiting.'); break
-    else:
-        try: import readline
-        except Exception: pass
-        agent.inc_out = True
-        while True:
-            q = input('> ').strip()
-            if not q: continue
-            try:
-                dq = agent.put_task(q, source='user')
-                while True:
-                    item = dq.get()
-                    if 'next' in item: print(item['next'], end='', flush=True)
-                    if 'done' in item: print(); break
-            except KeyboardInterrupt:
-                agent.abort()
-                print('\n[Interrupted]')
+        else:
+          try: import readline
+          except Exception: pass
+          agent.inc_out = True
+          while True:
+              q = input('> ').strip()
+              if not q: continue
+              try:
+                  dq = agent.put_task(q, source='user')
+                  while True:
+                      item = dq.get()
+                      if 'next' in item: print(item['next'], end='', flush=True)
+                      if 'done' in item: print(); break
+              except KeyboardInterrupt:
+                  agent.abort()
+                  print('\n[Interrupted]')
