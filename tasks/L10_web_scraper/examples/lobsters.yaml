@@ -1,0 +1,17 @@
+# L10 Scraper - Lobsters Latest
+name: lobsters_latest
+url: https://lobste.rs/
+base_url: https://lobste.rs/
+js_render: false
+timeout: 20
+delay: 1.5
+max_pages: 1
+
+parse:
+  container: "li.story"
+  next_page: "a.page_next"
+  fields:
+    title: "a.link"
+    title_url: "a.link"
+    score: "span.score"
+    tags: "span.tag"

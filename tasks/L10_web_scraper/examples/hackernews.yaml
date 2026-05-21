@@ -1,0 +1,17 @@
+# L10 Scraper - HackerNews Top Stories
+name: hackernews_top
+url: https://news.ycombinator.com/
+base_url: https://news.ycombinator.com/
+js_render: false
+timeout: 20
+delay: 1.5
+max_pages: 2
+
+parse:
+  container: "tr.athing"
+  next_page: "a.morelink"
+  fields:
+    rank: "span.rank"
+    title: "span.titleline > a"
+    title_url: "span.titleline > a"
+    site: "span.siteline"
