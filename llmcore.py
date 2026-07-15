@@ -359,7 +359,7 @@ def _stream_with_retry(sess, url, headers, payload, parse_fn):
     for attempt in range(sess.max_retries + 1):
         streamed = False
         try:
-            with requests.post(url, headers=headers, json=payload, stream=sess.stream, 
+            with requests.post(url, headers=headers, json=payload, stream=sess.stream,
                                timeout=(sess.connect_timeout, sess.read_timeout), proxies=sess.proxies, verify=sess.verify) as r:
                 if r.status_code >= 400:
                     if r.status_code in _RETRYABLE and attempt < sess.max_retries:
@@ -371,11 +371,10 @@ def _stream_with_retry(sess, url, headers, payload, parse_fn):
                     err = f"!!!Error: HTTP {r.status_code}" + (f": {body}" if body else "")
                     yield err; return [{"type": "text", "text": err}]
                 gen = parse_fn(r)
-                try:
-                    while True: streamed = True; yield next(gen)
-                except StopIteration as e:
-                    if not e.value and not streamed: raise requests.ConnectionError("empty response")
-                    return e.value or []
+                while True: streamed = True; yield next(gen)
+        except StopIteration as e:
+            if not e.value and not streamed: raise requests.ConnectionError("empty response")
+            return e.value or []
         except (requests.Timeout, requests.ConnectionError) as e:
             err = f"!!!Error: {type(e).__name__}"
             if attempt < sess.max_retries:
@@ -384,7 +383,13 @@ def _stream_with_retry(sess, url, headers, payload, parse_fn):
                 yield err; time.sleep(d); continue
             yield err; return [{"type": "text", "text": err}]
         except Exception as e:
-            err = f"\n\n[!!! 流异常中断 {type(e).__name__}: {e} !!!]" if streamed else f"!!!Error: {type(e).__name__}: {e}"
+            _STREAM_RETRYABLE = ('ChunkedEncodingError', 'InvalidChunkLength', 'ConnectionError', 'ConnectionResetError', 'RemoteDisconnected', 'ReadTimeout', 'SSLError', 'ProtocolError', 'IncompleteRead')
+            err_type = type(e).__name__
+            if any(t in err_type for t in _STREAM_RETRYABLE) and attempt < sess.max_retries:
+                d = _delay(None, attempt)
+                print(f"[LLM Stream Retry] {err_type} during streaming, retry in {d:.1f}s ({attempt+1}/{sess.max_retries+1})")
+                yield f"!!!Error: {err_type}(will retry)"; time.sleep(d); continue
+            err = f"\n\n[!!! 流异常中断 {err_type}: {e} !!!]" if streamed else f"!!!Error: {err_type}: {e}"
             yield err; return [{"type": "text", "text": err}]
 
 def _openai_stream(sess, messages):

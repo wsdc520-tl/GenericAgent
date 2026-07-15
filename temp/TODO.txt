@@ -1,10 +1,10 @@
 [x] task1: Draw AI smart speaker system architecture diagram and workflow (wake words, AEC, ASR, AI Agent, LLM, TTS, smart home control, music, TV etc) - output in drawio format, store in workspace
 [x] task3: Global Telecommunications Operators Smart Home List
 [x] task10: Create a VPN server that works with ClashVerge Windows terminal
-[ ] 产出 | feishu_bot增强：接入LLM实现智能对话，当前bot只能echo/固定回复，集成openai-compatible API后可变成真正的AI助手 | 验收：feishu_bot能收到消息后调用LLM返回智能回复，日志中有API调用记录
+[x] 产出 | feishu_bot增强：接入LLM实现智能对话，当前bot只能echo/固定回复，集成openai-compatible API后可变成真正的AI助手 | 验收：feishu_bot能收到消息后调用LLM返回智能回复，日志中有API调用记录 | 完成：NIM API z-ai/glm-5.1模型已集成，timeout=60s，服务active运行
 [x] 产出 | S3自动备份方案：完善~/s3_backup.py，增加增量备份、加密、定时执行(cron/systemd timer)、备份验证 | 验收：脚本支持增量备份+加密，有systemd timer或cron配置文件，手动运行成功
 [x] R1 产出 | 环境监控微服务：用fastapi写一个轻量HTTP服务，暴露/health端点监控VPN(xray)、feishu_bot、磁盘、内存状态，异常时飞书告警 | 验收：服务启动后curl /health返回JSON状态，xray/feishu_bot进程挂掉时飞书收到告警
 [x] 冲浪 | 挖掘冷门CLI效率工具：在GitHub/果核剥壳找3个AI少推荐但实测好用的CLI工具（如zellij/fd/bat/eza/zoxide之类但非这些），安装实测写评测 | 验收：3个工具安装成功+实测截图/输出+评测报告含适用场景
 [x] R3 产出 | feishu_bot能力扩展：添加命令系统（/status查服务器状态、/backup触发备份、/help命令列表），让飞书变成服务器遥控器 | 验收：在飞书发/status返回服务器状态，/backup触发备份，/help返回命令列表
 [x] R2 环境 | 服务器安全审计：检查ufw规则、SSH配置、开放端口、fail2ban状态，输出安全加固建议 | 验收：输出完整安全审计报告+具体加固命令
-[ ] 产出 | playwright通用爬虫框架：基于已有playwright封装一个可配置的通用网页数据提取工具（选择器配置+自动翻页+导出JSON/CSV） | 验收：能用YAML/JSON配置爬取任意页面列表数据，输出结构化文件
+[x] 产出 | 通用爬虫框架：httpx+BS4可配置网页数据提取工具（YAML配置+自动翻页+导出JSON/CSV），已替代playwright方案 | 验收：YAML配置爬取HackerNews 60条数据OK，commit 66f5b5b

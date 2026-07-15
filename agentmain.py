@@ -164,8 +164,8 @@ class GenericAgent:
                 print(f"Backend Error: {err_str}")
                 display_queue.put({'done': full_resp + f'\n```\n{err_str}\n```', 'source': source})
                 # 流异常(网络/连接错误)自动恢复：将原任务+错误上下文重新入队
-                _RETRYABLE = ('ChunkedEncodingError', 'ConnectionError', 'ConnectionResetError',
-                              'TimeoutError', 'RemoteDisconnected', 'ReadTimeout', 'SSLError')
+                _RETRYABLE = ('ChunkedEncodingError', 'InvalidChunkLength', 'ConnectionError', 'ConnectionResetError',
+                'TimeoutError', 'RemoteDisconnected', 'ReadTimeout', 'SSLError', 'ProtocolError', 'IncompleteRead')
                 err_type = type(e).__name__
                 if any(t in err_type for t in _RETRYABLE):
                     if not hasattr(self, '_retry_count'): self._retry_count = {}
@@ -254,9 +254,13 @@ if __name__ == '__main__':
                 try:
                     spec.loader.exec_module(mod); _mt = os.path.getmtime(args.reflect)
                     if hasattr(mod, 'init'): mod.init(_reflect_args)
-                    print('[Reflect] reloaded')
+                    # 热重载llmcore: reflect变更时同步reload，下次不需重启
+                    try:
+                        import importlib as _il; import llmcore as _lc
+                        _il.reload(_lc); print('[Reflect] reloaded (+llmcore)')
+                    except Exception as _e:
+                        print(f'[Reflect] reloaded (llmcore skipped: {_e})')
                 except Exception as e: print(f'[Reflect] reload error: {e}')
-            time.sleep(getattr(mod, 'INTERVAL', 5))
             try: task = mod.check()
             except Exception as e: 
                 print(f'[Reflect] check() error: {e}'); continue

@@ -36,7 +36,7 @@ IDLE_TIMEOUT = 60 # 空闲多少秒后触发"继续"(从90→60,更快恢复)
 IDLE_COOLDOWN = 30 # 触发一次后的冷却时间(秒)(从60→30,更频繁恢复)
 IDLE_MAX_CONTINUOUS = 20 # 最大连续触发次数(从5→20,避免过早进长冷却)
 IDLE_LONG_COOLDOWN = 60 # 连续触发过多后的长冷却(秒)(从300→60,长冷却也快速恢复)
-IDLE_DRAIN_BACKOFF_BASE = 300 # drain超时后退避基数(秒),指数递增
+IDLE_DRAIN_BACKOFF_BASE = 120 # drain超时后退避基数(秒),指数递增(从300→120,更快恢复)
 _idle_since = None       # 开始空闲的时间戳
 _idle_last_trigger = 0   # 上次触发"继续"的时间戳
 _idle_count = 0          # 连续触发次数
@@ -121,18 +121,22 @@ def _check_idle_continue():
     """检测agent空闲是否超时，超时则返回'继续'prompt"""
     global _idle_since, _idle_last_trigger, _idle_count, _drain_timeout_count
     now = _time.time()
+    _logger.warning(f'[IDLE-DEBUG] ENTER: idle_since={_idle_since}, idle_last_trigger={_idle_last_trigger}, idle_count={_idle_count}, drain_timeout_count={_drain_timeout_count}, now={now:.0f}')
 
     # drain超时退避：连续超时后增加空闲等待时间，避免死循环
     if _drain_timeout_count > 0:
         backoff = IDLE_DRAIN_BACKOFF_BASE * (2 ** min(_drain_timeout_count - 1, 2))
-        backoff = min(backoff, 1800)  # 绝对上限30分钟
+        backoff = min(backoff,  600)  # 绝对上限10分钟
         if now - _idle_last_trigger < backoff:
             # [FIX] 不再直接return None——仍需设置idle_since以保持空闲计时运行
             if _idle_since is None:
                 _idle_since = now
             _logger.info(f'DRAIN BACKOFF: count={_drain_timeout_count}, backoff={backoff}s, remaining={backoff - (now - _idle_last_trigger):.0f}s')
             return None
-        _logger.info(f'DRAIN BACKOFF expired: count={_drain_timeout_count}, was backoff={backoff}s')
+        # [FIX] backoff过期后衰减计数而非保留，避免下次又高backoff
+    if _drain_timeout_count > 1:
+        _drain_timeout_count -= 1
+    _logger.info(f'DRAIN BACKOFF expired: count={_drain_timeout_count}, was backoff={backoff}s')
 
     # 检查是否通过auto_continue.json启用
     ac_path = os.path.join(TASKS, 'auto_continue.json')
@@ -297,13 +301,18 @@ def check():
     return None
 
 def on_drain_timeout():
-    """drain超时回调：由agentmain在drain超时后调用，增加退避计数"""
-    global _drain_timeout_count, _idle_since
+    """drain超时回调：由agentmain在drain超时后调用，增加退避计数(上限5,超出自动衰减)"""
+    global _drain_timeout_count, _idle_since, _idle_last_trigger
     _drain_timeout_count += 1
+    # [FIX] 计数上限：超过5次自动衰减，防止backoff永久卡死
+    if _drain_timeout_count > 5:
+        _logger.warning(f'DRAIN TIMEOUT count capped: {_drain_timeout_count}->3 (auto-decay)')
+        _drain_timeout_count = 3
     # _idle_since = None  # [REMOVED] 死循环根因：重置空闲计时导致永远达不到IDLE_TIMEOUT阈值
     _idle_count = 0
+    _idle_last_trigger = _time.time()  # [FIX] 重置backoff基准时间
     backoff = IDLE_DRAIN_BACKOFF_BASE * (2 ** min(_drain_timeout_count - 1, 2))
-    backoff = min(backoff, 1800)  # 绝对上限30分钟
+    backoff = min(backoff,  600)  # 绝对上限10分钟
     _logger.warning(f'DRAIN TIMEOUT #{_drain_timeout_count}, backoff={backoff}s')
 
 def reset_drain_timeout():
