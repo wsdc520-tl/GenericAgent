@@ -378,8 +378,16 @@ def _stamp_oai_cache_markers(messages, model):
 def _stream_with_retry(sess, url, headers, payload, parse_fn):
     _RETRYABLE = {408, 409, 425, 429, 500, 502, 503, 504, 520, 521, 522, 523, 524, 525, 526, 527, 529}
     def _delay(resp, attempt):
-        try: ra = float((resp.headers or {}).get("retry-after"))
-        except: ra = None
+        ra = None
+        if resp is not None:
+            try: ra = float((resp.headers or {}).get("retry-after"))
+            except: ra = None
+        status = resp.status_code if resp is not None else None
+        if status == 429 and getattr(sess, 'rate_limit_blocking', False):
+            base = getattr(sess, 'rate_limit_base_delay', 300)
+            # blocking 模式：优先听服务端 retry-after，否则基础等待(5min)按 attempt 线性递增
+            if ra is not None: return max(0.5, ra)
+            return max(0.5, base * (1.0 + 0.5 * attempt))
         return max(0.5, ra if ra is not None else min(30.0, 1.5 * (2 ** attempt)))
     for attempt in range(sess.max_retries + 1):
         streamed = False
@@ -389,8 +397,16 @@ def _stream_with_retry(sess, url, headers, payload, parse_fn):
                 if r.status_code >= 400:
                     #pathlib.Path(__file__).parent.joinpath('temp','bad_requests.json').write_text(json.dumps({"url":url,"headers":headers,"payload":payload,"t":time.time()},ensure_ascii=False),encoding='utf-8')
                     if r.status_code in _RETRYABLE and attempt < sess.max_retries:
+                        rl_blocking = getattr(sess, 'rate_limit_blocking', False)
+                        # 429 且非 blocking：立即返回带 RL 标记的错误，交上层调度重试
+                        if r.status_code == 429 and not rl_blocking:
+                            try: body = r.text.strip()[:500]
+                            except: body = ""
+                            err = f"!!!Error: HTTP 429 RL" + (f": {body}" if body else "")
+                            yield err; return [{"type": "text", "text": err}]
                         d = _delay(r, attempt)
-                        print(f"[LLM Retry] HTTP {r.status_code}, retry in {d:.1f}s ({attempt+1}/{sess.max_retries+1})")
+                        tag = " [blocking 429]" if (r.status_code == 429 and rl_blocking) else ""
+                        print(f"[LLM Retry] HTTP {r.status_code}, retry in {d:.1f}s ({attempt+1}/{sess.max_retries+1}){tag}")
                         time.sleep(d); continue
                     try: body = r.text.strip()[:500]
                     except: body = ""
@@ -563,6 +579,10 @@ class BaseSession:
         proxy = cfg.get('proxy'); 
         self.proxies = {"http": proxy, "https": proxy} if proxy else None
         self.max_retries = max(0, int(cfg.get('max_retries', 4)))
+        # 429 (too many requests) 长退避开关：False(默认) 收到429立即返回错误交上层重试；
+        # True 则在底层 sleep rate_limit_base_delay(默认300s=5分钟) 后重试，复用 max_retries
+        self.rate_limit_blocking = bool(cfg.get('rate_limit_blocking', False))
+        self.rate_limit_base_delay = max(1.0, float(cfg.get('rate_limit_base_delay', 300)))
         self.verify = cfg.get('verify', True)
         self.stream = cfg.get('stream', True)
         default_ct, default_rt = (5, 40) if self.stream else (10, 240)
